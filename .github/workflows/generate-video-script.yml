@@ -1,0 +1,106 @@
+name: Generate Video Script (9:16)
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 视频主题或标题
+        required: true
+        type: string
+      target_audience:
+        description: 目标受众（如：普通观众、产品经理、开发者）
+        required: false
+        default: 普通观众
+        type: string
+      duration_minutes:
+        description: 预计时长（分钟）
+        required: false
+        default: 5
+        type: number
+      style:
+        description: 风格（如：讲解、教程、评测、剧情、访谈）
+        required: false
+        default: 讲解
+        type: string
+      aspect_ratio:
+        description: 画幅比例（固定 9:16）
+        required: false
+        default: "9:16"
+        type: string
+      references:
+        description: 参考资料（可多行，链接或要点）
+        required: false
+        default: ""
+        type: string
+      openai_model:
+        description: 模型名称（如 deepseek-chat）
+        required: false
+        default: deepseek-chat
+        type: string
+      dry_run:
+        description: 仅生成不提交（调试用）
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate script
+        id: gen
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_ORG_ID: ${{ secrets.OPENAI_ORG_ID }}
+        run: |
+          python scripts/generate_script.py \
+            --topic "${{ inputs.topic }}" \
+            --target_audience "${{ inputs.target_audience }}" \
+            --duration_minutes "${{ inputs.duration_minutes }}" \
+            --style "${{ inputs.style }}" \
+            --language "zh" \
+            --aspect_ratio "${{ inputs.aspect_ratio }}" \
+            --references "${{ inputs.references }}" \
+            --model "${{ inputs.openai_model }}"
+          echo "Generated files:"
+          git status --porcelain
+
+      - name: Create Pull Request
+        if: ${{ inputs.dry_run == false }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "feat(content): 自动生成竖屏(9:16)视频脚本 - ${{ inputs.topic }}"
+          title: "自动生成竖屏(9:16)视频脚本：${{ inputs.topic }}"
+          body: |
+            自动生成的竖屏视频脚本
+            - 主题: ${{ inputs.topic }}
+            - 受众: ${{ inputs.target_audience }}
+            - 时长: ${{ inputs.duration_minutes }} 分钟
+            - 风格: ${{ inputs.style }}
+            - 画幅: ${{ inputs.aspect_ratio }}
+            - 模型: ${{ inputs.openai_model }}
+          branch: "video-script/${{ github.run_id }}"
+          delete-branch: true
+          add-paths: |
+            content/scripts/**.md
+
+      - name: Dry-run note
+        if: ${{ inputs.dry_run == true }}
+        run: echo "Dry run enabled. No PR created."
