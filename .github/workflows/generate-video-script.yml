@@ -1,106 +1,186 @@
-name: Generate Video Script (9:16)
+name: Generate Video From Markdown (9:16)
 
 on:
   workflow_dispatch:
     inputs:
-      topic:
-        description: 视频主题或标题
+      md_path:
+        description: "Path to the generated script .md (e.g., content/scripts/xxx.md)"
         required: true
         type: string
-      target_audience:
-        description: 目标受众（如：普通观众、产品经理、开发者）
+      tts_provider:
+        description: "TTS provider: gtts (default) or openai"
         required: false
-        default: 普通观众
+        default: "gtts"
+        type: choice
+        options:
+          - gtts
+          - openai
+      openai_tts_model:
+        description: "OpenAI TTS model (if tts_provider=openai), e.g., gpt-4o-mini-tts or tts-1"
+        required: false
+        default: "gpt-4o-mini-tts"
         type: string
-      duration_minutes:
-        description: 预计时长（分钟）
+      openai_tts_voice:
+        description: "OpenAI TTS voice (if tts_provider=openai), e.g., alloy"
         required: false
-        default: 5
-        type: number
-      style:
-        description: 风格（如：讲解、教程、评测、剧情、访谈）
-        required: false
-        default: 讲解
+        default: "alloy"
         type: string
-      aspect_ratio:
-        description: 画幅比例（固定 9:16）
+      language:
+        description: "Narration language code for TTS (e.g., zh, en). For gTTS default zh."
         required: false
-        default: "9:16"
+        default: "zh"
         type: string
-      references:
-        description: 参考资料（可多行，链接或要点）
+      image_urls:
+        description: "Comma-separated image URLs for slideshow; leave empty to use local dir or solid background"
         required: false
         default: ""
         type: string
-      openai_model:
-        description: 模型名称（如 deepseek-chat）
+      images_dir:
+        description: "Optional local images directory (e.g., assets/images). Ignored if image_urls is provided."
         required: false
-        default: deepseek-chat
+        default: ""
         type: string
-      dry_run:
-        description: 仅生成不提交（调试用）
+      burn_subtitles:
+        description: "Burn SRT subtitles into the final video"
+        required: false
+        default: true
+        type: boolean
+      cps:
+        description: "Characters per second for subtitle timing"
+        required: false
+        default: "4.0"
+        type: string
+      min_sec:
+        description: "Min seconds per subtitle"
+        required: false
+        default: "1.2"
+        type: string
+      max_sec:
+        description: "Max seconds per subtitle"
+        required: false
+        default: "5.0"
+        type: string
+      chunk:
+        description: "Max characters per subtitle line"
+        required: false
+        default: "18"
+        type: string
+      bgm_url:
+        description: "Optional background music URL (mp3/aac). Will auto-duck under narration."
+        required: false
+        default: ""
+        type: string
+      commit_to_branch:
+        description: "Commit outputs to a branch with PR instead of only artifacts"
         required: false
         default: false
         type: boolean
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
-  generate:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Install system deps (ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            pip install openai==1.43.0 gTTS==2.5.3 pydub==0.25.1 requests==2.32.3 python-slugify==8.0.4 pyyaml==6.0.2
+          fi
 
-      - name: Generate script
-        id: gen
+      - name: Prepare paths
+        id: prep
+        run: |
+          MD="${{ inputs.md_path }}"
+          echo "md_path=$MD" >> $GITHUB_OUTPUT
+          STEM="${MD%.md}"
+          echo "srt_path=${STEM}.srt" >> $GITHUB_OUTPUT
+          echo "txt_path=${STEM}.txt" >> $GITHUB_OUTPUT
+          echo "out_dir=outputs/run-${{ github.run_id }}" >> $GITHUB_OUTPUT
+          mkdir -p "outputs/run-${{ github.run_id }}"
+
+      - name: Generate SRT
+        run: |
+          python scripts/md_to_srt.py \
+            --input "${{ steps.prep.outputs.md_path }}" \
+            --output "${{ steps.prep.outputs.srt_path }}" \
+            --cps "${{ inputs.cps }}" \
+            --min-sec "${{ inputs.min_sec }}" \
+            --max-sec "${{ inputs.max_sec }}" \
+            --chunk "${{ inputs.chunk }}"
+
+      - name: Extract narration text
+        run: |
+          python scripts/md_to_text.py \
+            --input "${{ steps.prep.outputs.md_path }}" \
+            --output "${{ steps.prep.outputs.txt_path }}"
+
+      - name: Synthesize narration
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_ORG_ID: ${{ secrets.OPENAI_ORG_ID }}
         run: |
-          python scripts/generate_script.py \
-            --topic "${{ inputs.topic }}" \
-            --target_audience "${{ inputs.target_audience }}" \
-            --duration_minutes "${{ inputs.duration_minutes }}" \
-            --style "${{ inputs.style }}" \
-            --language "zh" \
-            --aspect_ratio "${{ inputs.aspect_ratio }}" \
-            --references "${{ inputs.references }}" \
-            --model "${{ inputs.openai_model }}"
-          echo "Generated files:"
-          git status --porcelain
+          python scripts/tts.py \
+            --input "${{ steps.prep.outputs.txt_path }}" \
+            --output "${{ steps.prep.outputs.out_dir }}/narration.mp3" \
+            --provider "${{ inputs.tts_provider }}" \
+            --language "${{ inputs.language }}" \
+            --openai-model "${{ inputs.openai_tts_model }}" \
+            --openai-voice "${{ inputs.openai_tts_voice }}"
 
-      - name: Create Pull Request
-        if: ${{ inputs.dry_run == false }}
+      - name: Assemble video
+        run: |
+          python scripts/assemble_video.py \
+            --audio "${{ steps.prep.outputs.out_dir }}/narration.mp3" \
+            --srt "${{ steps.prep.outputs.srt_path }}" \
+            --output "${{ steps.prep.outputs.out_dir }}/final_9x16.mp4" \
+            --image-urls "${{ inputs.image_urls }}" \
+            --images-dir "${{ inputs.images_dir }}" \
+            --burn-subtitles "${{ inputs.burn_subtitles }}" \
+            --bgm-url "${{ inputs.bgm_url }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-bundle-run-${{ github.run_id }}
+          path: |
+            ${{ steps.prep.outputs.out_dir }}/final_9x16.mp4
+            ${{ steps.prep.outputs.out_dir }}/narration.mp3
+            ${{ steps.prep.outputs.srt_path }}
+          if-no-files-found: error
+
+      - name: Create Pull Request (optional)
+        if: ${{ inputs.commit_to_branch }}
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "feat(content): 自动生成竖屏(9:16)视频脚本 - ${{ inputs.topic }}"
-          title: "自动生成竖屏(9:16)视频脚本：${{ inputs.topic }}"
+          commit-message: "chore: export video bundle for ${{ inputs.md_path }}"
+          title: "feat: export video bundle - ${{ inputs.md_path }}"
           body: |
-            自动生成的竖屏视频脚本
-            - 主题: ${{ inputs.topic }}
-            - 受众: ${{ inputs.target_audience }}
-            - 时长: ${{ inputs.duration_minutes }} 分钟
-            - 风格: ${{ inputs.style }}
-            - 画幅: ${{ inputs.aspect_ratio }}
-            - 模型: ${{ inputs.openai_model }}
-          branch: "video-script/${{ github.run_id }}"
-          delete-branch: true
+            Automated export containing:
+            - Video: outputs/run-${{ github.run_id }}/final_9x16.mp4
+            - Audio: outputs/run-${{ github.run_id }}/narration.mp3
+            - Subtitles: ${{ steps.prep.outputs.srt_path }}
+          branch: "video/export/${{ github.run_id }}"
           add-paths: |
-            content/scripts/**.md
-
-      - name: Dry-run note
-        if: ${{ inputs.dry_run == true }}
-        run: echo "Dry run enabled. No PR created."
+            outputs/run-${{ github.run_id }}/final_9x16.mp4
+            outputs/run-${{ github.run_id }}/narration.mp3
+            ${{ steps.prep.outputs.srt_path }}
+          delete-branch: true
