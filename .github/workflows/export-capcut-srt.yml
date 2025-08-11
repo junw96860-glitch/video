@@ -1,0 +1,57 @@
+name: Export CapCut SRT
+
+on:
+  workflow_dispatch:
+    inputs:
+      md_path:
+        description: "Path to the generated script .md"
+        required: true
+        type: string
+      cps:
+        description: "Characters per second (reading speed)"
+        required: false
+        default: "4.0"
+        type: string
+      min_sec:
+        description: "Min seconds per subtitle"
+        required: false
+        default: "1.2"
+        type: string
+      max_sec:
+        description: "Max seconds per subtitle"
+        required: false
+        default: "5.0"
+        type: string
+      chunk:
+        description: "Max characters per subtitle line"
+        required: false
+        default: "18"
+        type: string
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run exporter
+        run: |
+          python scripts/md_to_srt.py \
+            --input "${{ inputs.md_path }}" \
+            --output "${{ inputs.md_path }}".srt \
+            --cps "${{ inputs.cps }}" \
+            --min-sec "${{ inputs.min_sec }}" \
+            --max-sec "${{ inputs.max_sec }}" \
+            --chunk "${{ inputs.chunk }}"
+
+      - name: Upload SRT as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: capcut-srt
+          path: ${{ inputs.md_path }}.srt
+          if-no-files-found: error
