@@ -1,0 +1,106 @@
+name: Generate Video Script (9:16)
+
+"on":
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Video topic or title"
+        required: true
+        type: string
+      target_audience:
+        description: "Target audience (e.g., general, product managers, developers)"
+        required: false
+        default: "general audience"
+        type: string
+      duration_minutes:
+        description: "Expected duration (minutes)"
+        required: false
+        default: 5
+        type: number
+      style:
+        description: "Style (e.g., explanation, tutorial, review, story, interview)"
+        required: false
+        default: "explanation"
+        type: string
+      aspect_ratio:
+        description: "Aspect ratio (fixed 9:16)"
+        required: false
+        default: "9:16"
+        type: string
+      references:
+        description: "Reference materials (multiline, links or key points)"
+        required: false
+        default: ""
+        type: string
+      openai_model:
+        description: "Model name (e.g., gpt-4o-mini)"
+        required: false
+        default: gpt-4o-mini
+        type: string
+      dry_run:
+        description: "Generate only, do not submit (for debugging)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate script
+        id: gen
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_ORG_ID: ${{ secrets.OPENAI_ORG_ID }}
+        run: |
+          python scripts/generate_script.py \
+            --topic "${{ inputs.topic }}" \
+            --target_audience "${{ inputs.target_audience }}" \
+            --duration_minutes "${{ inputs.duration_minutes }}" \
+            --style "${{ inputs.style }}" \
+            --language "zh" \
+            --aspect_ratio "${{ inputs.aspect_ratio }}" \
+            --references "${{ inputs.references }}" \
+            --model "${{ inputs.openai_model }}"
+          echo "Generated files:"
+          git status --porcelain
+
+      - name: Create Pull Request
+        if: ${{ inputs.dry_run == false }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "feat(content): Auto-generate vertical (9:16) video script - ${{ inputs.topic }}"
+          title: "Auto-generate vertical (9:16) video script: ${{ inputs.topic }}"
+          body: |
+            Auto-generated vertical video script
+            - Topic: ${{ inputs.topic }}
+            - Audience: ${{ inputs.target_audience }}
+            - Duration: ${{ inputs.duration_minutes }} minutes
+            - Style: ${{ inputs.style }}
+            - Aspect ratio: ${{ inputs.aspect_ratio }}
+            - Model: ${{ inputs.openai_model }}
+          branch: "video-script/${{ github.run_id }}"
+          delete-branch: true
+          add-paths: |
+            content/scripts/**.md
+
+      - name: Dry-run note
+        if: ${{ inputs.dry_run == true }}
+        run: echo "Dry run enabled. No PR created."
